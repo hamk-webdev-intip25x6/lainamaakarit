@@ -59,6 +59,7 @@ cover/
 # Django stuff:
 *.log
 local_settings.py
+db.sqlite3
 db.sqlite3-journal
 
 # Flask stuff:
@@ -221,3 +222,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Library encrypted binaries and temporary unencrypted loan copies
+library/encrypted/*.enc
+!library/encrypted/.gitkeep
+library/loans/*
+!library/loans/.gitkeep
+

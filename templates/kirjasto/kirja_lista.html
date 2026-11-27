@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Kirjasto | Lainamääkärit{% endblock %}
+
+{% block content %}
+<section class="page-header">
+    <h1>E-kirjasto</h1>
+    <p class="text-muted">Hae ja selaa PDF-kirjoja nimen, tekijän, avainsanan, kategorian tai julkaisuvuoden perusteella.</p>
+</section>
+
+<section class="card search-card" aria-label="Kirjojen haku ja suodatus">
+    <form method="get" action="{% url 'kirja_lista' %}" class="search-form">
+        <div class="search-grid">
+            <div class="form-group mb-0">
+                <label for="q">Hakusana</label>
+                <input
+                    type="search"
+                    id="q"
+                    name="q"
+                    value="{{ hakusana }}"
+                    placeholder="Esim. Paasikivi, startup, anatomia, 2018..."
+                >
+            </div>
+
+            <div class="form-group mb-0">
+                <label for="kategoria">Kategoria</label>
+                <select id="kategoria" name="kategoria">
+                    <option value="">Kaikki kategoriat</option>
+                    {% for kat in kategoriat %}
+                        <option value="{{ kat }}" {% if valittu_kategoria == kat %}selected{% endif %}>{{ kat }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="search-controls">
+            <label class="checkbox-label">
+                <input
+                    type="checkbox"
+                    name="vain_saatavilla"
+                    value="1"
+                    {% if vain_saatavilla %}checked{% endif %}
+                >
+                Näytä vain saatavilla olevat kirjat
+            </label>
+
+            <div class="search-buttons">
+                <button type="submit" class="btn btn-primary">Hae kirjoja</button>
+                {% if hakusana or valittu_kategoria or vain_saatavilla %}
+                    <a href="{% url 'kirja_lista' %}" class="btn btn-outline">Tyhjennä suodattimet</a>
+                {% endif %}
+            </div>
+        </div>
+    </form>
+</section>
+
+<p class="results-summary" role="status">
+    Löytyi <strong>{{ kirja_rivit|length }}</strong> teosta.
+</p>
+
+{% if kirja_rivit %}
+    <div class="book-grid">
+        {% for rivi in kirja_rivit %}
+            {% with kirja=rivi.kirja laina=rivi.aktiivinen_laina %}
+            <article class="card book-card">
+                <div class="book-card-header">
+                    <div class="badge-row">
+                        {% if not laina %}
+                            <span class="badge badge-available">Saatavilla</span>
+                        {% elif rivi.on_oma_laina %}
+                            <span class="badge badge-own-loan">Lainassa sinulla</span>
+                        {% else %}
+                            <span class="badge badge-loaned">Lainassa</span>
+                        {% endif %}
+                        {% if kirja.kategoria %}
+                            <span class="badge badge-meta">{{ kirja.kategoria }}</span>
+                        {% endif %}
+                        {% if kirja.kieli %}
+                            <span class="badge badge-meta">{{ kirja.kieli }}</span>
+                        {% endif %}
+                    </div>
+
+                    <h2 class="book-title break-anywhere">
+                        <a href="{% url 'kirja_tiedot' kirja.kirja_id %}">{{ kirja.nimi }}</a>
+                    </h2>
+                    <p class="book-author break-anywhere">
+                        {{ kirja.tekija }} ({{ kirja.tehty }})
+                    </p>
+                </div>
+
+                {% if kirja.kuvaus %}
+                    <p class="book-desc break-anywhere">{{ kirja.kuvaus }}</p>
+                {% endif %}
+
+                {% if kirja.avainsana %}
+                    <p class="book-keywords break-anywhere">
+                        <strong>Avainsanat:</strong> {{ kirja.avainsana }}
+                    </p>
+                {% endif %}
+
+                <div class="book-card-footer">
+                    <a href="{% url 'kirja_tiedot' kirja.kirja_id %}" class="btn btn-outline btn-sm">Tiedot</a>
+
+                    {% if rivi.on_oma_laina %}
+                        {% if laina.laina_tunniste %}
+                            <a href="{% url 'laina_pdf' laina.laina_tunniste %}" target="_blank" rel="noopener" class="btn btn-primary btn-sm">Avaa PDF</a>
+                        {% endif %}
+                        <form method="post" action="{% url 'lopeta_laina' laina.laina_id %}" class="inline-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                            <button type="submit" class="btn btn-outline btn-sm">Palauta</button>
+                        </form>
+                    {% elif not laina %}
+                        {% if user.is_authenticated %}
+                            <form method="post" action="{% url 'lainaa_kirja' kirja.kirja_id %}" class="inline-form">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-primary btn-sm">Lainaa ({{ laina_ajan_kuvaus }})</button>
+                            </form>
+                        {% else %}
+                            <a href="{% url 'login' %}?next={% url 'kirja_tiedot' kirja.kirja_id %}" class="btn btn-primary btn-sm">Kirjaudu lainataksesi</a>
+                        {% endif %}
+                    {% else %}
+                        <span class="loan-until text-muted">Vapautuu {{ laina.laina_loppu|date:"d.m.Y H:i" }}</span>
+                    {% endif %}
+                </div>
+            </article>
+            {% endwith %}
+        {% endfor %}
+    </div>
+{% else %}
+    <section class="card empty-state">
+        <h2>Ei hakutuloksia</h2>
+        <p>Hakuehdoillasi ei löytynyt yhtään PDF-kirjaa. Kokeile toista hakusanaa tai poista suodattimet.</p>
+        <a href="{% url 'kirja_lista' %}" class="btn btn-primary">Näytä kaikki kirjat</a>
+    </section>
+{% endif %}
+{% endblock %}

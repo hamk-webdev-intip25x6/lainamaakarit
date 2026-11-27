@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Omat lainat | Lainamääkärit{% endblock %}
+
+{% block content %}
+<section class="page-header">
+    <h1>Omat lainat</h1>
+    <p class="text-muted">Hallitse voimassa olevia PDF-lainojasi ja tarkastele lainahistoriaasi.</p>
+</section>
+
+<section class="card loans-section">
+    <h2>Voimassa olevat lainat ({{ aktiiviset_lainat|length }})</h2>
+
+    {% if aktiiviset_lainat %}
+        <div class="loan-list">
+            {% for laina in aktiiviset_lainat %}
+                <article class="loan-row">
+                    <div class="loan-row-info">
+                        <h3 class="break-anywhere">
+                            <a href="{% url 'kirja_tiedot' laina.kirja.kirja_id %}">{{ laina.kirja.nimi }}</a>
+                        </h3>
+                        <p class="text-muted break-anywhere">
+                            {{ laina.kirja.tekija }} &middot; Lainattu {{ laina.laina_alku|date:"d.m.Y H:i:s" }} &middot;
+                            Päättyy <strong>{{ laina.laina_loppu|date:"d.m.Y H:i:s" }}</strong>
+                            <span class="loan-countdown" data-expires-at="{{ laina.laina_loppu|date:'c' }}"></span>
+                        </p>
+                    </div>
+                    <div class="action-group compact-actions">
+                        {% if laina.laina_tunniste %}
+                            <a href="{% url 'laina_pdf' laina.laina_tunniste %}" target="_blank" rel="noopener" class="btn btn-primary btn-sm">Avaa PDF</a>
+                            <a href="{% url 'laina_pdf' laina.laina_tunniste %}?download=1" class="btn btn-outline btn-sm">Lataa</a>
+                        {% endif %}
+                        <form method="post" action="{% url 'lopeta_laina' laina.laina_id %}" class="inline-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{% url 'omat_lainat' %}">
+                            <button type="submit" class="btn btn-danger btn-sm">Lopeta laina</button>
+                        </form>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p>Sinulla ei ole tällä hetkellä voimassa olevia lainoja.</p>
+        <a href="{% url 'kirja_lista' %}" class="btn btn-primary">Selaa kirjastoa</a>
+    {% endif %}
+</section>
+
+{% if paattyneet_lainat %}
+    <section class="card loans-section mt-section">
+        <h2>Päättyneet lainat</h2>
+        <div class="loan-list">
+            {% for laina in paattyneet_lainat %}
+                <article class="loan-row loan-row-ended">
+                    <div class="loan-row-info">
+                        <h3 class="break-anywhere">
+                            <a href="{% url 'kirja_tiedot' laina.kirja.kirja_id %}">{{ laina.kirja.nimi }}</a>
+                        </h3>
+                        <p class="text-muted">
+                            Lainattu {{ laina.laina_alku|date:"d.m.Y H:i" }} &ndash; Päättynyt {{ laina.laina_loppu|date:"d.m.Y H:i" }}
+                            (väliaikainen PDF poistettu)
+                        </p>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    </section>
+{% endif %}
+{% endblock %}

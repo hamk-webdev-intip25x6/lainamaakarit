@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Kirjaudu sisään | Lainamääkärit{% endblock %}
+
+{% block content %}
+<section class="card form-card">
+    <h1>Kirjaudu sisään</h1>
+
+    {% if form.non_field_errors %}
+        <div class="alert alert-error" role="alert">
+            {% for error in form.non_field_errors %}
+                <p>{{ error }}</p>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'login' %}" novalidate>
+        {% csrf_token %}
+        {% if next %}
+            <input type="hidden" name="next" value="{{ next }}">
+        {% endif %}
+
+        {% for field in form %}
+            <div class="form-group">
+                <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                {{ field }}
+                {% if field.errors %}
+                    <ul class="field-errors">
+                        {% for error in field.errors %}
+                            <li>{{ error }}</li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+            </div>
+        {% endfor %}
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-block">Kirjaudu sisään</button>
+        </div>
+    </form>
+
+    <p class="form-footer">
+        Eikö sinulla ole vielä tiliä? <a href="{% url 'signup' %}">Rekisteröidy tästä</a>.
+    </p>
+</section>
+{% endblock %}

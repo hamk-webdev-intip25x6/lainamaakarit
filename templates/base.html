@@ -1,0 +1,100 @@
+{% load static %}<!DOCTYPE html>
+<html lang="fi" class="no-js" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Lainamääkärit{% endblock %}</title>
+    <script>
+        (function () {
+            document.documentElement.classList.remove('no-js');
+            var validThemes = ['light', 'dark', 'high-light', 'high-dark'];
+            var saved = null;
+            try {
+                saved = window.localStorage.getItem('theme');
+            } catch (e) {}
+            var theme = validThemes.indexOf(saved) !== -1
+                ? saved
+                : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <a class="skip-link" href="#main-content">Siirry sisältöön</a>
+
+    <header class="site-header">
+        <div class="container header-inner">
+            <div class="header-top">
+                <a class="brand" href="{% url 'home' %}">Lainamääkärit</a>
+                <button
+                    class="nav-toggle"
+                    id="nav-toggle"
+                    type="button"
+                    aria-expanded="false"
+                    aria-controls="nav-menu"
+                    aria-label="Avaa tai sulje valikko"
+                >
+                    Valikko
+                </button>
+            </div>
+
+            <nav class="site-nav" id="nav-menu" aria-label="Päävalikko">
+                <ul class="nav-links">
+                    <li><a href="{% url 'home' %}">Etusivu</a></li>
+                    <li><a href="{% url 'kirja_lista' %}">Kirjasto</a></li>
+                    {% if user.is_authenticated %}
+                        <li><a href="{% url 'omat_lainat' %}">Omat lainat</a></li>
+                        <li class="nav-user">
+                            <span class="user-badge" title="{{ user.username }}">{{ user.username }}</span>
+                        </li>
+                        <li>
+                            <form method="post" action="{% url 'logout' %}" class="inline-form">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-outline btn-sm">Kirjaudu ulos</button>
+                            </form>
+                        </li>
+                    {% else %}
+                        <li><a href="{% url 'login' %}">Kirjaudu sisään</a></li>
+                        <li><a href="{% url 'signup' %}" class="btn btn-primary btn-sm">Rekisteröidy</a></li>
+                    {% endif %}
+                </ul>
+
+                <div class="theme-switcher">
+                    <label for="theme-select" class="theme-label">Teema:</label>
+                    <select id="theme-select" class="theme-select" aria-label="Valitse väriteema ja kontrasti">
+                        <option value="light">Vaalea</option>
+                        <option value="dark">Tumma</option>
+                        <option value="high-light">Korkea kontrasti (vaalea)</option>
+                        <option value="high-dark">Korkea kontrasti (tumma)</option>
+                    </select>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <main id="main-content" class="site-main container">
+        {% if messages %}
+            <section class="messages" aria-label="Ilmoitukset">
+                {% for message in messages %}
+                    <div class="alert alert-{{ message.tags|default:'info' }}" role="status">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </section>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">
+            <p>Lainamääkärit &ndash; E-kirjasto PDF-teoksille</p>
+        </div>
+    </footer>
+
+    <script src="{% static 'js/theme.js' %}"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

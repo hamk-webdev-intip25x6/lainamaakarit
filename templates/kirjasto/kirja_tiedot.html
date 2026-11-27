@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}{{ kirja.nimi }} | Lainamääkärit{% endblock %}
+
+{% block content %}
+<p class="back-nav">
+    <a href="{% url 'kirja_lista' %}">&larr; Takaisin kirjastoon</a>
+</p>
+
+<article class="card detail-card">
+    <div class="badge-row">
+        {% if not aktiivinen_laina %}
+            <span class="badge badge-available">Saatavilla</span>
+        {% elif on_oma_laina %}
+            <span class="badge badge-own-loan">Lainassa sinulla</span>
+        {% else %}
+            <span class="badge badge-loaned">Lainassa</span>
+        {% endif %}
+        {% if kirja.kategoria %}
+            <span class="badge badge-meta">{{ kirja.kategoria }}</span>
+        {% endif %}
+        {% if kirja.kieli %}
+            <span class="badge badge-meta">{{ kirja.kieli }}</span>
+        {% endif %}
+    </div>
+
+    <h1 class="break-anywhere">{{ kirja.nimi }}</h1>
+
+    <dl class="meta-list">
+        <div>
+            <dt>Tekijä</dt>
+            <dd class="break-anywhere">{{ kirja.tekija }}</dd>
+        </div>
+        <div>
+            <dt>Julkaisuvuosi</dt>
+            <dd>{{ kirja.tehty }}</dd>
+        </div>
+        {% if kirja.avainsana %}
+            <div>
+                <dt>Avainsanat</dt>
+                <dd class="break-anywhere">{{ kirja.avainsana }}</dd>
+            </div>
+        {% endif %}
+    </dl>
+
+    {% if kirja.kuvaus %}
+        <div class="detail-description break-anywhere">
+            <h2>Kuvaus</h2>
+            <p>{{ kirja.kuvaus }}</p>
+        </div>
+    {% endif %}
+
+    <section class="loan-box" aria-label="Lainaustiedot">
+        <h2>Lainaus</h2>
+
+        {% if on_oma_laina %}
+            <p>
+                Tämä teos on lainassa sinulla. Väliaikainen salaamaton PDF-kopio on käytettävissäsi
+                <strong>{{ aktiivinen_laina.laina_loppu|date:"d.m.Y \k\l\o H:i:s" }}</strong> asti
+                <span class="loan-countdown" data-expires-at="{{ aktiivinen_laina.laina_loppu|date:'c' }}"></span>.
+            </p>
+            <div class="action-group">
+                {% if aktiivinen_laina.laina_tunniste %}
+                    <a href="{% url 'laina_pdf' aktiivinen_laina.laina_tunniste %}" target="_blank" rel="noopener" class="btn btn-primary">
+                        Avaa väliaikainen PDF
+                    </a>
+                    <a href="{% url 'laina_pdf' aktiivinen_laina.laina_tunniste %}?download=1" class="btn btn-outline">
+                        Lataa PDF
+                    </a>
+                {% endif %}
+                <form method="post" action="{% url 'lopeta_laina' aktiivinen_laina.laina_id %}" class="inline-form">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger">Lopeta laina ja poista kopio</button>
+                </form>
+            </div>
+        {% elif not aktiivinen_laina %}
+            {% if user.is_authenticated %}
+                <p>
+                    Kirja on vapaana. Lainaaminen luo sinulle väliaikaisen salaamattoman PDF-kopion ja linkin,
+                    joka on voimassa <strong>{{ laina_ajan_kuvaus }}</strong> tai kunnes päätät lainan.
+                </p>
+                <form method="post" action="{% url 'lainaa_kirja' kirja.kirja_id %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-primary">Lainaa kirja ({{ laina_ajan_kuvaus }})</button>
+                </form>
+            {% else %}
+                <p>Kirjaudu sisään tai rekisteröidy lainataksesi tämän PDF-kirjan.</p>
+                <div class="action-group">
+                    <a href="{% url 'login' %}?next={% url 'kirja_tiedot' kirja.kirja_id %}" class="btn btn-primary">Kirjaudu sisään</a>
+                    <a href="{% url 'signup' %}" class="btn btn-outline">Rekisteröidy</a>
+                </div>
+            {% endif %}
+        {% else %}
+            <p>
+                Kirja on tällä hetkellä lainassa toisella käyttäjällä. Se vapautuu viimeistään
+                <strong>{{ aktiivinen_laina.laina_loppu|date:"d.m.Y \k\l\o H:i:s" }}</strong>.
+            </p>
+        {% endif %}
+    </section>
+</article>
+{% endblock %}
