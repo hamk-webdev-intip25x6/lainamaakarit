@@ -5,15 +5,24 @@ from .models import Kirja, Kommentti, Laina
 
 @admin.register(Kirja)
 class KirjaAdmin(admin.ModelAdmin):
-    list_display = ("kirja_id", "nimi", "tekija", "tehty", "kategoria", "kieli", "salattu_tiedosto")
-    list_filter = ("kategoria", "kieli")
+    list_display = (
+        "kirja_id",
+        "nimi",
+        "tekija",
+        "tehty",
+        "kategoria",
+        "kieli",
+        "listattu",
+        "salattu_tiedosto",
+    )
+    list_filter = ("listattu", "kategoria", "kieli")
     search_fields = ("nimi", "tekija", "avainsana", "kategoria", "kuvaus")
 
 
 @admin.register(Kommentti)
 class KommenttiAdmin(admin.ModelAdmin):
-    list_display = ("kommentti_id", "kirja", "kayttaja", "arvosana")
-    list_filter = ("arvosana",)
+    list_display = ("kommentti_id", "kirja", "kayttaja", "arvosana", "luotu", "muokattu")
+    list_filter = ("arvosana", "luotu")
     search_fields = ("teksti", "kirja__nimi", "kayttaja__username")
 
 

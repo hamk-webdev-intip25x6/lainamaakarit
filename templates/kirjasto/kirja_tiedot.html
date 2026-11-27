@@ -9,7 +9,9 @@
 
 <article class="card detail-card">
     <div class="badge-row">
-        {% if not aktiivinen_laina %}
+        {% if not kirja.listattu %}
+            <span class="badge badge-loaned">Poistettu valikoimasta</span>
+        {% elif not aktiivinen_laina %}
             <span class="badge badge-available">Saatavilla</span>
         {% elif on_oma_laina %}
             <span class="badge badge-own-loan">Lainassa sinulla</span>
@@ -25,6 +27,25 @@
     </div>
 
     <h1 class="break-anywhere">{{ kirja.nimi }}</h1>
+
+    <div class="rating-summary-banner" aria-label="Kirjan arvosana">
+        {% if arvostelujen_maara > 0 %}
+            <span class="star-display" aria-label="Arvosana {{ arvosana_mediaani|floatformat:1 }} / 5 tähteä">
+                {% for i in tahti_asteikko %}{% if i <= taydet_tahdet %}<span class="star-filled" aria-hidden="true">&#9733;</span>{% else %}<span class="star-empty" aria-hidden="true">&#9734;</span>{% endif %}{% endfor %}
+            </span>
+            <span class="rating-numbers">
+                <strong>{{ arvosana_mediaani|floatformat:1 }} / 5</strong>
+                <span class="text-muted">
+                    (mediaani: {{ arvosana_mediaani|floatformat:1 }} &middot; keskiarvo: {{ arvosana_keskiarvo|floatformat:1 }} &middot; {{ arvostelujen_maara }} arvostelu{{ arvostelujen_maara|pluralize:"a" }})
+                </span>
+            </span>
+        {% else %}
+            <span class="star-display" aria-hidden="true">
+                <span class="star-empty">&#9734;&#9734;&#9734;&#9734;&#9734;</span>
+            </span>
+            <span class="text-muted">Ei vielä arvosteluja</span>
+        {% endif %}
+    </div>
 
     <dl class="meta-list">
         <div>
@@ -98,4 +119,125 @@
         {% endif %}
     </section>
 </article>
+
+<section class="card detail-card mt-section reviews-section" id="arvostelut" aria-label="Kirjan arvostelut">
+    <h2>Arvostelut ({{ arvostelujen_maara }})</h2>
+
+    {% if user.is_authenticated %}
+        <div class="review-form-box">
+            {% if oma_arvostelu %}
+                <h3>Muokkaa arvosteluasi</h3>
+                <p class="text-muted review-hint">
+                    Voit arvostella kirjan vain kerran, mutta voit muokata aiempaa arvosteluasi alla.
+                </p>
+            {% else %}
+                <h3>Kirjoita arvostelu</h3>
+                <p class="text-muted review-hint">
+                    Anna kirjalle tähtiarvosana (1–5) ja kirjoita palautteesi.
+                </p>
+            {% endif %}
+
+            <form method="post" action="{% url 'tallenna_arvostelu' kirja.kirja_id %}" class="review-form" novalidate>
+                {% csrf_token %}
+
+                {% if arvostelu_lomake.non_field_errors %}
+                    <div class="alert alert-error" role="alert">
+                        {% for error in arvostelu_lomake.non_field_errors %}
+                            <p>{{ error }}</p>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+
+                <fieldset class="star-fieldset">
+                    <legend>{{ arvostelu_lomake.arvosana.label }}</legend>
+                    <div class="star-picker" data-star-picker>
+                        {% with valittu=arvostelu_lomake.arvosana.value|stringformat:"s" %}
+                            {% for i in tahti_asteikko %}
+                                {% with i_str=i|stringformat:"s" %}
+                                    <label class="star-choice" for="id_arvosana_{{ i }}">
+                                        <input
+                                            type="radio"
+                                            name="arvosana"
+                                            id="id_arvosana_{{ i }}"
+                                            value="{{ i }}"
+                                            {% if valittu == i_str %}checked{% endif %}
+                                            required
+                                        >
+                                        <span class="star-visual" data-star-value="{{ i }}" aria-hidden="true">&#9733;</span>
+                                        <span class="star-num">{{ i }}</span>
+                                        <span class="sr-only">{% if i == 1 %}1 tähti{% else %}{{ i }} tähteä{% endif %}</span>
+                                    </label>
+                                {% endwith %}
+                            {% endfor %}
+                        {% endwith %}
+                        <span class="star-status text-muted" data-star-status aria-live="polite"></span>
+                    </div>
+                    {% if arvostelu_lomake.arvosana.errors %}
+                        <ul class="field-errors">
+                            {% for error in arvostelu_lomake.arvosana.errors %}
+                                <li>{{ error }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                </fieldset>
+
+                <div class="form-group">
+                    <label for="{{ arvostelu_lomake.teksti.id_for_label }}">{{ arvostelu_lomake.teksti.label }}</label>
+                    {{ arvostelu_lomake.teksti }}
+                    <div class="char-counter-row">
+                        <span class="text-muted">Enintään {{ max_arvostelu_pituus }} merkkiä.</span>
+                        <span class="text-muted" data-char-counter="{{ arvostelu_lomake.teksti.id_for_label }}" data-max="{{ max_arvostelu_pituus }}"></span>
+                    </div>
+                    {% if arvostelu_lomake.teksti.errors %}
+                        <ul class="field-errors">
+                            {% for error in arvostelu_lomake.teksti.errors %}
+                                <li>{{ error }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                </div>
+
+                <button type="submit" class="btn btn-primary">
+                    {% if oma_arvostelu %}Päivitä arvostelu{% else %}Lähetä arvostelu{% endif %}
+                </button>
+            </form>
+        </div>
+    {% else %}
+        <p class="review-login-prompt">
+            <a href="{% url 'login' %}?next={% url 'kirja_tiedot' kirja.kirja_id %}">Kirjaudu sisään</a>
+            arvostellaksesi tämän kirjan.
+        </p>
+    {% endif %}
+
+    {% if kommentit %}
+        <div class="review-list">
+            {% for kommentti in kommentit %}
+                <article class="review-card {% if user.is_authenticated and kommentti.kayttaja_id == user.pk %}review-card-own{% endif %}">
+                    <header class="review-header">
+                        <div class="review-author-group">
+                            <strong class="review-author break-anywhere">{{ kommentti.kayttaja.username }}</strong>
+                            {% if user.is_authenticated and kommentti.kayttaja_id == user.pk %}
+                                <span class="badge badge-meta">Oma arvostelu</span>
+                            {% endif %}
+                        </div>
+
+                        <div class="review-meta">
+                            <span class="star-display" aria-label="{{ kommentti.arvosana }} / 5 tähteä">
+                                {% for i in tahti_asteikko %}{% if i <= kommentti.arvosana %}<span class="star-filled" aria-hidden="true">&#9733;</span>{% else %}<span class="star-empty" aria-hidden="true">&#9734;</span>{% endif %}{% endfor %}
+                                <strong class="review-grade-num">{{ kommentti.arvosana }}/5</strong>
+                            </span>
+                            <time class="review-date text-muted" datetime="{{ kommentti.luotu|date:'c' }}">
+                                {{ kommentti.luotu|date:"d.m.Y H:i" }}
+                            </time>
+                        </div>
+                    </header>
+
+                    <div class="review-body">{{ kommentti.teksti }}</div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="text-muted mt-1">Tälle kirjalle ei ole vielä jätetty arvosteluja. Ole ensimmäinen!</p>
+    {% endif %}
+</section>
 {% endblock %}

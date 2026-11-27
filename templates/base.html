@@ -46,6 +46,9 @@
                     <li><a href="{% url 'kirja_lista' %}">Kirjasto</a></li>
                     {% if user.is_authenticated %}
                         <li><a href="{% url 'omat_lainat' %}">Omat lainat</a></li>
+                        {% if user.is_staff or user.is_superuser %}
+                            <li><a href="{% url 'huolto' %}">Huolto</a></li>
+                        {% endif %}
                         <li class="nav-user">
                             <span class="user-badge" title="{{ user.username }}">{{ user.username }}</span>
                         </li>

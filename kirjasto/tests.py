@@ -1,19 +1,18 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 import tempfile
 import time
 
-from django.conf import settings
 from django.contrib.auth import get_user_model, views as auth_views
 from django.contrib.staticfiles import finders
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import IntegrityError, connection
 from django.test import TestCase, override_settings
 from django.urls import resolve, reverse
 from django.utils import timezone
 
 from .crypto import EncryptionError, decrypt_pdf_file, encrypt_pdf_file, is_encrypted_file
-from .forms import SignupForm
+from .forms import ArvosteluLomake, SignupForm
 from .models import Kirja, Kommentti, Laina
 from .services import (
     SAMPLE_BOOKS,
@@ -80,11 +79,19 @@ class DatabaseSchemaAndModelTests(TestCase):
                 "kieli",
                 "kuvaus",
                 "salattu_tiedosto",
+                "listattu",
             }.issubset(kirjat_cols)
         )
-        self.assertEqual(
-            kommentit_cols,
-            {"kommentti_id", "kayttaja_id", "kirja_id", "teksti", "arvosana"},
+        self.assertTrue(
+            {
+                "kommentti_id",
+                "kayttaja_id",
+                "kirja_id",
+                "teksti",
+                "arvosana",
+                "luotu",
+                "muokattu",
+            }.issubset(kommentit_cols)
         )
         self.assertTrue(
             {
@@ -118,6 +125,7 @@ class DatabaseSchemaAndModelTests(TestCase):
         laina.full_clean()
         self.assertIsNotNone(self.kirja.kirja_id)
         self.assertIsNotNone(kommentti.kommentti_id)
+        self.assertIsNotNone(kommentti.luotu)
         self.assertIsNotNone(laina.laina_id)
         self.assertIn("Paasikiven", str(self.kirja))
         self.assertIn("5/5", str(kommentti))
@@ -371,6 +379,9 @@ class TemplatesAndThemeTests(TestCase):
             '[data-theme="dark"]',
             '[data-theme="high-light"]',
             '[data-theme="high-dark"]',
+            ".review-body",
+            "overflow-wrap: anywhere",
+            "unicode-bidi: plaintext",
         ):
             self.assertIn(selector, css_content)
 
@@ -402,12 +413,10 @@ class PDFLibraryEncryptionTests(TestCase):
             decrypt_pdf_file(salattu, purettu, secret="salainen-avain-123")
             self.assertEqual(purettu.read_bytes(), MINIMAL_PDF_BYTES)
 
-            # Väärä avain epäonnistuu
             with self.assertRaises(EncryptionError):
                 decrypt_pdf_file(salattu, tmp / "vaara.pdf", secret="vaara-avain")
             self.assertFalse((tmp / "vaara.pdf").exists())
 
-            # Yhden tavun peukalointi huomataan HMAC-tarkistuksessa
             peukaloitu = tmp / "peukaloitu.pdf.enc"
             mutable = bytearray(salattu_data)
             mutable[30] ^= 0xFF
@@ -432,7 +441,6 @@ class PDFLibraryEncryptionTests(TestCase):
                 self.assertEqual(luodut1, 10)
                 self.assertEqual(Kirja.objects.count(), 10)
 
-                # Toinen ajo on idempotentti eikä luo duplikaatteja
                 salatut2, luodut2 = synkronoi_esimerkkikirjat()
                 self.assertEqual(salatut2, 0)
                 self.assertEqual(luodut2, 0)
@@ -514,7 +522,6 @@ class LoanLifecycleAndSharingTests(TestCase):
         self.assertTrue(temp_pdf.is_file())
         self.assertEqual(temp_pdf.read_bytes(), MINIMAL_PDF_BYTES)
 
-        # Lainaaja saa avata ja ladata väliaikaisen PDF:n linkistä
         pdf_url = reverse("laina_pdf", args=[laina.laina_tunniste])
         pdf_resp = self.client.get(pdf_url)
         self.assertEqual(pdf_resp.status_code, 200)
@@ -526,7 +533,6 @@ class LoanLifecycleAndSharingTests(TestCase):
         self.assertIn("attachment", dl_resp["Content-Disposition"])
         dl_resp.close()
 
-        # Toinen käyttäjä ei pääse lainalinkkiin eikä voi lainata samaa kirjaa tai lopettaa lainaa
         self.client.force_login(self.toinen)
         self.assertEqual(self.client.get(pdf_url).status_code, 403)
         self.assertEqual(
@@ -539,7 +545,6 @@ class LoanLifecycleAndSharingTests(TestCase):
         )
         self.assertContains(esto_resp, "lainassa toisella käyttäjällä")
 
-        # Lainaaja päättää lainan -> salaamaton tiedosto poistuu välittömästi ja kirja vapautuu
         self.client.force_login(self.lainaaja)
         lopetus_resp = self.client.post(
             reverse("lopeta_laina", args=[laina.laina_id]),
@@ -549,7 +554,6 @@ class LoanLifecycleAndSharingTests(TestCase):
         self.assertFalse(temp_pdf.exists())
         self.assertEqual(self.client.get(pdf_url).status_code, 404)
 
-        # Nyt toinen käyttäjä pystyy lainaamaan kirjan
         self.client.force_login(self.toinen)
         uusi_resp = self.client.post(
             reverse("lainaa_kirja", args=[self.kirja.kirja_id]),
@@ -573,18 +577,14 @@ class LoanLifecycleAndSharingTests(TestCase):
         temp_pdf = self.lib_root / "loans" / laina.valiaikainen_tiedosto
         pdf_url = reverse("laina_pdf", args=[laina.laina_tunniste])
 
-        # Heti lainauksen jälkeen tiedosto on olemassa ja luettavissa
         self.assertTrue(temp_pdf.is_file())
         first_get = self.client.get(pdf_url)
         self.assertEqual(first_get.status_code, 200)
         first_get.close()
 
-        # Odotetaan sekunnin murto-osa yli laina-ajan
         time.sleep(0.55)
 
-        # Tausta-ajastin on jo poistanut salaamattoman PDF-tiedoston levyltä
         self.assertFalse(temp_pdf.exists())
-        # Linkki palauttaa 404 vanhenemisen jälkeen
         self.assertEqual(self.client.get(pdf_url).status_code, 404)
 
 
@@ -676,3 +676,392 @@ class LibrarySearchAndFrontendTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertNotContains(resp, "<script>alert('xss')</script>")
         self.assertEqual(Kirja.objects.count(), 4)
+
+
+class BookReviewsAndRatingsTests(TestCase):
+    """PR3-testit: kirjan arvostelut, muokkaus, uniikkius, tähtimediaani sekä kielisyötteet."""
+
+    def setUp(self) -> None:
+        self.kirja = Kirja.objects.create(
+            nimi="The Lean Startup",
+            tekija="Eric Ries",
+            tehty=2011,
+            kategoria="Liiketoiminta",
+            kieli="Englanti",
+            avainsana="startup, yrittäjyys",
+            kuvaus="Ketterän tuotekehityksen perusteos.",
+        )
+        self.u1 = User.objects.create_user(username="lukija_1", password="SalasanaYksi123!")
+        self.u2 = User.objects.create_user(username="lukija_2", password="SalasanaKaksi123!")
+        self.u3 = User.objects.create_user(username="lukija_3", password="SalasanaKolme123!")
+        self.u4 = User.objects.create_user(username="lukija_4", password="SalasanaNelja123!")
+
+    def test_kayttaja_voi_arvostella_kirjan_vain_kerran_mutta_voi_muokata_sita(self) -> None:
+        self.client.force_login(self.u1)
+        arvostelu_url = reverse("tallenna_arvostelu", args=[self.kirja.kirja_id])
+
+        # Ensimmäinen arvostelu luodaan
+        r1 = self.client.post(
+            arvostelu_url,
+            {"arvosana": 3, "teksti": "Ensimmäinen lukukokemus oli kohtalainen."},
+            follow=True,
+        )
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(Kommentti.objects.filter(kirja=self.kirja, kayttaja=self.u1).count(), 1)
+        alkuperainen = Kommentti.objects.get(kirja=self.kirja, kayttaja=self.u1)
+        self.assertEqual(alkuperainen.arvosana, 3)
+        self.assertIsNotNone(alkuperainen.luotu)
+        self.assertContains(r1, "Muokkaa arvosteluasi")
+        self.assertContains(r1, "Päivitä arvostelu")
+
+        # Toinen lähetys samalta käyttäjältä päivittää olemassa olevan arvostelun luomatta uutta
+        r2 = self.client.post(
+            arvostelu_url,
+            {"arvosana": 5, "teksti": "Uudelleenluettuna erinomainen ja käytännöllinen kirja!"},
+            follow=True,
+        )
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(Kommentti.objects.filter(kirja=self.kirja, kayttaja=self.u1).count(), 1)
+        paivitetty = Kommentti.objects.get(kirja=self.kirja, kayttaja=self.u1)
+        self.assertEqual(paivitetty.kommentti_id, alkuperainen.kommentti_id)
+        self.assertEqual(paivitetty.arvosana, 5)
+        self.assertEqual(
+            paivitetty.teksti,
+            "Uudelleenluettuna erinomainen ja käytännöllinen kirja!",
+        )
+
+        # Myös tietokannan UniqueConstraint estää tupla-arvostelun suoraan ORM:n kautta
+        with self.assertRaises(IntegrityError):
+            Kommentti.objects.create(
+                kayttaja=self.u1,
+                kirja=self.kirja,
+                arvosana=4,
+                teksti="Suora duplikaattiyritys",
+            )
+
+    def test_mediaani_ja_keskiarvo_lasketaan_ja_naytetaan_lainaussivulla(self) -> None:
+        sivu_url = reverse("kirja_tiedot", args=[self.kirja.kirja_id])
+
+        # Ei arvosteluja aluksi
+        self.assertIsNone(self.kirja.arvosana_mediaani())
+        self.assertIsNone(self.kirja.arvosana_keskiarvo())
+        tyhja_resp = self.client.get(sivu_url)
+        self.assertContains(tyhja_resp, "Ei vielä arvosteluja")
+
+        # Pariton määrä arvosanoja poikkeavalla arvolla: [1, 5, 5] -> mediaani 5.0, keskiarvo 3.7
+        Kommentti.objects.create(kayttaja=self.u1, kirja=self.kirja, arvosana=1, teksti="Ei minun makuuni.")
+        Kommentti.objects.create(kayttaja=self.u2, kirja=self.kirja, arvosana=5, teksti="Huipputeos!")
+        Kommentti.objects.create(kayttaja=self.u3, kirja=self.kirja, arvosana=5, teksti="Suosittelen lämpimästi!")
+
+        self.assertEqual(self.kirja.arvosana_mediaani(), 5.0)
+        self.assertEqual(self.kirja.arvosana_keskiarvo(), 3.7)
+
+        pariton_resp = self.client.get(sivu_url)
+        self.assertContains(pariton_resp, "5,0 / 5")
+        self.assertContains(pariton_resp, "mediaani: 5,0")
+        self.assertContains(pariton_resp, "keskiarvo: 3,7")
+        self.assertContains(pariton_resp, "3 arvostelua")
+
+        # Parillinen määrä arvosanoja: [1, 4, 5, 5] -> mediaani 4.5, keskiarvo 3.8
+        Kommentti.objects.create(kayttaja=self.u4, kirja=self.kirja, arvosana=4, teksti="Hyvä kirja.")
+        self.assertEqual(self.kirja.arvosana_mediaani(), 4.5)
+        self.assertEqual(self.kirja.arvosana_keskiarvo(), 3.8)
+
+        parillinen_resp = self.client.get(sivu_url)
+        self.assertContains(parillinen_resp, "4,5 / 5")
+        self.assertContains(parillinen_resp, "mediaani: 4,5")
+
+    def test_arvostelulomakkeen_validointi_ja_pituusrajoite(self) -> None:
+        # Kirjautumaton ohjataan kirjautumissivulle
+        anon = self.client.post(
+            reverse("tallenna_arvostelu", args=[self.kirja.kirja_id]),
+            {"arvosana": 5, "teksti": "Anonyymi yritys"},
+        )
+        self.assertEqual(anon.status_code, 302)
+        self.assertIn(reverse("login"), anon["Location"])
+
+        self.client.force_login(self.u1)
+        url = reverse("tallenna_arvostelu", args=[self.kirja.kirja_id])
+
+        # Virheelliset tähtiarvosanat (0 ja 6) hylätään
+        for virhe_tahti in (0, 6, -1):
+            resp = self.client.post(url, {"arvosana": virhe_tahti, "teksti": "Kelvollinen teksti"})
+            self.assertEqual(resp.status_code, 400)
+        self.assertEqual(Kommentti.objects.count(), 0)
+
+        # Tyhjä teksti hylätään
+        tyhja_resp = self.client.post(url, {"arvosana": 4, "teksti": "   \n\t  "})
+        self.assertEqual(tyhja_resp.status_code, 400)
+
+        # Ylipitkä arvostelu (> 2000 merkkiä) hylätään sivun hajoamisen estämiseksi
+        ylipitka = ArvosteluLomake(
+            data={"arvosana": 4, "teksti": "Ä" * (Kommentti.MAX_TEKSTI_PITUUS + 1)}
+        )
+        self.assertFalse(ylipitka.is_valid())
+        self.assertIn("teksti", ylipitka.errors)
+
+    def test_monikieliset_ja_sivua_rikkovat_arvostelut_renderoityvat_turvallisesti(self) -> None:
+        arvostelut = [
+            (
+                self.u1,
+                5,
+                "Erinomainen suomenkielinen lukukokemus! Ääkköset (ä, ö, å) ja pitkät yhdyssanat toimivat.",
+            ),
+            (
+                self.u2,
+                5,
+                "这本书内容充实、结构清晰，非常适合在移动设备上阅读，五星推荐给所有读者！",
+            ),
+            (
+                self.u3,
+                4,
+                "مراجعة ممتازة: الكتاب واضح وسهل التصفح، ونظام التقييم بالنجوم يعمل بشكل رائع!",
+            ),
+            (
+                self.u4,
+                2,
+                (
+                    '<script>alert("xss")</script></textarea><div style="width:99999px">'
+                    + ("KatkeamatonPitkäMerkkijonoIlmanVälilyöntejä" * 20)
+                    + " \u202eRTL_OVERRIDE\u202c 📚🔥"
+                ),
+            ),
+        ]
+
+        url = reverse("tallenna_arvostelu", args=[self.kirja.kirja_id])
+        for kayttaja, arvosana, teksti in arvostelut:
+            self.client.force_login(kayttaja)
+            resp = self.client.post(url, {"arvosana": arvosana, "teksti": teksti}, follow=True)
+            self.assertEqual(resp.status_code, 200)
+
+        sivu = self.client.get(reverse("kirja_tiedot", args=[self.kirja.kirja_id]))
+        self.assertEqual(sivu.status_code, 200)
+        self.assertContains(sivu, "非常适合在移动设备上阅读")
+        self.assertContains(sivu, "نظام التقييم بالنجوم")
+        self.assertNotContains(sivu, '<script>alert("xss")</script>')
+        self.assertContains(sivu, "&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;")
+
+
+class HuoltoAdminPanelTests(TestCase):
+    """PR4-testit: Huolto-ylläpitopaneeli, lainojen muokkaus/päättäminen, piilotus ja kommenttisyöte."""
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmpdir.name)
+        self.lib_root = self.tmp_path / "library"
+        self.src_dir = self.tmp_path / "pdf"
+        self.src_dir.mkdir()
+        (self.lib_root / "encrypted").mkdir(parents=True)
+        (self.lib_root / "loans").mkdir(parents=True)
+
+        self.override = override_settings(
+            LIBRARY_ROOT=self.lib_root,
+            PDF_SOURCE_DIR=self.src_dir,
+            LOAN_MODE="default",
+            LOAN_DURATION_SECONDS=None,
+        )
+        self.override.enable()
+
+        raaka_pdf = self.src_dir / "huolto_kirja.pdf"
+        raaka_pdf.write_bytes(MINIMAL_PDF_BYTES)
+        encrypt_pdf_file(raaka_pdf, self.lib_root / "encrypted" / "huolto_kirja.pdf.enc")
+
+        self.admin = User.objects.create_user(
+            username="yllapitaja_mikko",
+            password="AdminSalasana123!",
+            is_staff=True,
+        )
+        self.tavallinen = User.objects.create_user(
+            username="perus_lukija",
+            password="PerusSalasana123!",
+        )
+        self.toinen = User.objects.create_user(
+            username="toinen_arvostelija",
+            password="ToinenSalasana123!",
+        )
+        self.kolmas = User.objects.create_user(
+            username="kolmas_arvostelija",
+            password="KolmasSalasana123!",
+        )
+
+        self.kirja = Kirja.objects.create(
+            nimi="Huoltotestin käsikirja",
+            tekija=" Maija Meikäläinen",
+            tehty=2022,
+            kategoria="Tekniikka",
+            kieli="Suomi",
+            avainsana="huolto, ylläpito",
+            kuvaus="Testikirja Huolto-paneelin toimintojen varmistamiseen.",
+            salattu_tiedosto="huolto_kirja.pdf.enc",
+        )
+
+    def tearDown(self) -> None:
+        self.override.disable()
+        self.tmpdir.cleanup()
+
+    def test_huolto_kayttooikeudet_ja_base_html_perinta(self) -> None:
+        huolto_url = reverse("huolto")
+
+        # Anonyymi ohjataan kirjautumissivulle
+        anon_resp = self.client.get(huolto_url)
+        self.assertEqual(anon_resp.status_code, 302)
+        self.assertIn(reverse("login"), anon_resp["Location"])
+
+        # Tavallinen käyttäjä saa 403 Forbidden eikä näe Huolto-linkkiä navigaatiossa
+        self.client.force_login(self.tavallinen)
+        home_user = self.client.get(reverse("home"))
+        self.assertNotContains(home_user, f'href="{huolto_url}"')
+        self.assertEqual(self.client.get(huolto_url).status_code, 403)
+        self.assertEqual(
+            self.client.post(reverse("huolto_vaihda_listaus", args=[self.kirja.kirja_id])).status_code,
+            403,
+        )
+
+        # Ylläpitäjä näkee Huolto-linkin ja sivu perii base.html:n
+        self.client.force_login(self.admin)
+        home_admin = self.client.get(reverse("home"))
+        self.assertContains(home_admin, f'href="{huolto_url}"')
+        admin_resp = self.client.get(huolto_url)
+        self.assertEqual(admin_resp.status_code, 200)
+        self.assertTemplateUsed(admin_resp, "kirjasto/huolto.html")
+        self.assertTemplateUsed(admin_resp, "base.html")
+
+    def test_huolto_voi_muokata_lainaa_ja_lopettaa_sen_ennenaikaisesti(self) -> None:
+        self.client.force_login(self.tavallinen)
+        self.client.post(reverse("lainaa_kirja", args=[self.kirja.kirja_id]))
+        laina = Laina.objects.get(kirja=self.kirja, kayttaja=self.tavallinen)
+        temp_pdf = self.lib_root / "loans" / laina.valiaikainen_tiedosto
+        self.assertTrue(temp_pdf.is_file())
+
+        # Ylläpitäjä muokkaa lainan päättymisaikaa pidemmäksi
+        self.client.force_login(self.admin)
+        muokkaa_url = reverse("huolto_muokkaa_laina", args=[laina.laina_id])
+        get_edit = self.client.get(muokkaa_url)
+        self.assertEqual(get_edit.status_code, 200)
+        self.assertTemplateUsed(get_edit, "base.html")
+
+        uusi_alku = timezone.localtime(laina.laina_alku).replace(microsecond=0)
+        uusi_loppu = uusi_alku + timedelta(days=7)
+        post_edit = self.client.post(
+            muokkaa_url,
+            {
+                "kirja": self.kirja.kirja_id,
+                "kayttaja": self.tavallinen.pk,
+                "laina_alku": uusi_alku.strftime("%Y-%m-%dT%H:%M:%S"),
+                "laina_loppu": uusi_loppu.strftime("%Y-%m-%dT%H:%M:%S"),
+            },
+            follow=True,
+        )
+        self.assertEqual(post_edit.status_code, 200)
+        laina.refresh_from_db()
+        self.assertEqual(laina.laina_loppu, uusi_loppu)
+        self.assertTrue(temp_pdf.is_file())
+
+        # Ylläpitäjä päättää lainan ennenaikaisesti Huollosta -> PDF-kopio poistuu heti
+        lopeta_resp = self.client.post(
+            reverse("huolto_lopeta_laina", args=[laina.laina_id]),
+            follow=True,
+        )
+        self.assertEqual(lopeta_resp.status_code, 200)
+        laina.refresh_from_db()
+        self.assertLessEqual(laina.laina_loppu, timezone.now())
+        self.assertFalse(temp_pdf.exists())
+
+    def test_huolto_voi_poistaa_kirjan_valikoimasta_ja_palauttaa_sen(self) -> None:
+        self.client.force_login(self.admin)
+        listaus_url = reverse("huolto_vaihda_listaus", args=[self.kirja.kirja_id])
+
+        # Poistetaan kirja valikoimasta (delist)
+        self.client.post(listaus_url, {"toiminto": "piilota"}, follow=True)
+        self.kirja.refresh_from_db()
+        self.assertFalse(self.kirja.listattu)
+
+        # Tavallinen käyttäjä ei näe kirjaa katalogissa eikä pääse lainaamaan sitä
+        self.client.force_login(self.tavallinen)
+        katalogi = self.client.get(reverse("kirja_lista"))
+        self.assertNotContains(katalogi, "Huoltotestin käsikirja")
+        self.assertEqual(
+            self.client.get(reverse("kirja_tiedot", args=[self.kirja.kirja_id])).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post(reverse("lainaa_kirja", args=[self.kirja.kirja_id])).status_code,
+            404,
+        )
+
+        # Ylläpitäjä palauttaa kirjan valikoimaan
+        self.client.force_login(self.admin)
+        self.client.post(listaus_url, {"toiminto": "palauta"}, follow=True)
+        self.kirja.refresh_from_db()
+        self.assertTrue(self.kirja.listattu)
+
+        self.client.force_login(self.tavallinen)
+        katalogi_palautettu = self.client.get(reverse("kirja_lista"))
+        self.assertContains(katalogi_palautettu, "Huoltotestin käsikirja")
+
+    def test_kommenttisyote_luontipaivasuodatin_ja_arvostelun_poisto(self) -> None:
+        k_suomi = Kommentti.objects.create(
+            kayttaja=self.tavallinen,
+            kirja=self.kirja,
+            arvosana=5,
+            teksti="Vanhempi suomenkielinen kommentti: erittäin selkeä rakenne.",
+        )
+        k_kiina = Kommentti.objects.create(
+            kayttaja=self.toinen,
+            kirja=self.kirja,
+            arvosana=4,
+            teksti="管理员面板测试评论：按创建日期筛选功能非常实用！",
+        )
+        k_arabia_xss = Kommentti.objects.create(
+            kayttaja=self.kolmas,
+            kirja=self.kirja,
+            arvosana=2,
+            teksti='تعليق عربي للاختبار مع رموز خاصة <script>alert("huolto")</script>',
+        )
+
+        # Asetetaan kolmelle kommentille eri luontipäivät suodatuksen testaamiseksi
+        Kommentti.objects.filter(pk=k_suomi.pk).update(
+            luotu=timezone.make_aware(datetime(2026, 11, 10, 12, 0, 0))
+        )
+        Kommentti.objects.filter(pk=k_kiina.pk).update(
+            luotu=timezone.make_aware(datetime(2026, 11, 20, 14, 30, 0))
+        )
+        Kommentti.objects.filter(pk=k_arabia_xss.pk).update(
+            luotu=timezone.make_aware(datetime(2026, 11, 27, 9, 15, 0))
+        )
+
+        self.client.force_login(self.admin)
+        huolto_url = reverse("huolto")
+
+        # Ilman suodatinta kaikki 3 näkyvät ja XSS-merkinnät on pakattu turvallisesti
+        kaikki = self.client.get(huolto_url)
+        self.assertContains(kaikki, "Vanhempi suomenkielinen kommentti")
+        self.assertContains(kaikki, "按创建日期筛选功能非常实用")
+        self.assertContains(kaikki, "تعليق عربي للاختبار")
+        self.assertNotContains(kaikki, '<script>alert("huolto")</script>')
+
+        # Tarkka luontipäivän suodatin (?paiva=2026-11-20) näyttää vain kyseisen päivän kommentin
+        tarkka = self.client.get(huolto_url, {"paiva": "2026-11-20"})
+        self.assertContains(tarkka, "按创建日期筛选功能非常实用")
+        self.assertNotContains(tarkka, "Vanhempi suomenkielinen kommentti")
+        self.assertNotContains(tarkka, "تعليق عربي للاختبار")
+
+        # Aikavälisuodatin (?alkaen=2026-11-19&asti=2026-11-27)
+        aikavali = self.client.get(huolto_url, {"alkaen": "2026-11-19", "asti": "2026-11-27"})
+        self.assertContains(aikavali, "按创建日期筛选功能非常实用")
+        self.assertContains(aikavali, "تعليق عربي للاختبار")
+        self.assertNotContains(aikavali, "Vanhempi suomenkielinen kommentti")
+
+        # Virheellinen päiväsuodatin käsitellään kaatumatta
+        virhe_pvm = self.client.get(huolto_url, {"paiva": "ei-kelvollinen-pvm"})
+        self.assertEqual(virhe_pvm.status_code, 200)
+        self.assertContains(virhe_pvm, "VVVV-KK-PP")
+
+        # Arvostelun poistaminen Huollosta
+        poisto = self.client.post(
+            reverse("huolto_poista_kommentti", args=[k_arabia_xss.kommentti_id]),
+            follow=True,
+        )
+        self.assertEqual(poisto.status_code, 200)
+        self.assertFalse(Kommentti.objects.filter(pk=k_arabia_xss.kommentti_id).exists())
+

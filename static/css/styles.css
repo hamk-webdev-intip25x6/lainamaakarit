@@ -20,6 +20,8 @@
     --danger-bg: #fef2f2;
     --success: #15803d;
     --success-bg: #f0fdf4;
+    --star: #b45309;
+    --star-muted: #94a3b8;
     --focus-ring: #2563eb;
     --shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
     color-scheme: light;
@@ -41,6 +43,8 @@
     --danger-bg: #450a0a;
     --success: #86efac;
     --success-bg: #052e16;
+    --star: #fbbf24;
+    --star-muted: #64748b;
     --focus-ring: #60a5fa;
     --shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
@@ -62,6 +66,8 @@
     --danger-bg: #ffffff;
     --success: #004d00;
     --success-bg: #ffffff;
+    --star: #000000;
+    --star-muted: #000000;
     --focus-ring: #000099;
     --shadow: none;
     color-scheme: light;
@@ -83,6 +89,8 @@
     --danger-bg: #000000;
     --success: #55ff55;
     --success-bg: #000000;
+    --star: #ffff00;
+    --star-muted: #ffffff;
     --focus-ring: #00ffff;
     --shadow: none;
     color-scheme: dark;
@@ -129,6 +137,18 @@ a:hover {
 :focus-visible {
     outline: 3px solid var(--focus-ring);
     outline-offset: 2px;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 .skip-link {
@@ -317,6 +337,7 @@ a:hover {
     border-radius: 0.5rem;
     padding: 1.5rem;
     box-shadow: var(--shadow);
+    max-width: 100%;
 }
 
 .hero-card {
@@ -335,6 +356,10 @@ a:hover {
 
 .mt-section {
     margin-top: 1.5rem;
+}
+
+.mt-1 {
+    margin-top: 1rem;
 }
 
 .mb-0 {
@@ -456,6 +481,7 @@ h3 {
     flex-direction: column;
     justify-content: space-between;
     gap: 0.75rem;
+    overflow: hidden;
 }
 
 .badge-row {
@@ -525,6 +551,20 @@ h3 {
     color: var(--text-muted);
 }
 
+.book-card-rating {
+    margin: 0.35rem 0 0;
+    font-size: 0.9rem;
+}
+
+.stars-inline,
+.star-filled {
+    color: var(--star);
+}
+
+.star-empty {
+    color: var(--star-muted);
+}
+
 .book-desc {
     margin: 0;
     font-size: 0.92rem;
@@ -554,6 +594,30 @@ h3 {
 .back-nav {
     margin-top: 0;
     margin-bottom: 1rem;
+}
+
+.rating-summary-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.625rem 0.875rem;
+    margin-bottom: 1rem;
+    background-color: var(--surface-alt);
+    border: var(--border-width) solid var(--border);
+    border-radius: 0.375rem;
+}
+
+.star-display {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.1rem;
+    font-size: 1.25rem;
+    line-height: 1;
+}
+
+.rating-numbers {
+    font-size: 0.95rem;
 }
 
 .meta-list {
@@ -635,6 +699,203 @@ h3 {
 .empty-state {
     text-align: center;
     padding: 2.5rem 1.5rem;
+}
+
+/* Reviews & 1–5 Star Rating Input (Tight Layout Constraints) */
+.reviews-section {
+    overflow: hidden;
+}
+
+.review-form-box {
+    padding: 1.125rem;
+    margin-bottom: 1.5rem;
+    background-color: var(--surface-alt);
+    border: var(--border-width) solid var(--border);
+    border-radius: 0.375rem;
+    max-width: 100%;
+}
+
+.review-hint {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-size: 0.92rem;
+}
+
+.star-fieldset {
+    border: 0;
+    margin: 0 0 1.25rem;
+    padding: 0;
+    min-width: 0;
+}
+
+.star-fieldset legend {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    padding: 0;
+}
+
+.star-picker {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.star-choice {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    min-width: 3rem;
+    min-height: 2.75rem;
+    padding: 0.35rem 0.625rem;
+    background-color: var(--surface);
+    border: var(--border-width) solid var(--border);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 700;
+}
+
+.star-choice input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    min-height: 0;
+    margin: 0;
+}
+
+.star-choice:focus-within {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.star-visual {
+    font-size: 1.35rem;
+    line-height: 1;
+    color: var(--star-muted);
+}
+
+.star-choice.is-lit .star-visual,
+.star-choice input[type="radio"]:checked ~ .star-visual {
+    color: var(--star);
+}
+
+.star-choice input[type="radio"]:checked ~ .star-num,
+.star-choice.is-selected {
+    border-color: var(--primary);
+}
+
+.star-choice.is-selected {
+    background-color: var(--bg);
+    border-width: 2px;
+}
+
+.star-status {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-left: 0.25rem;
+}
+
+.review-form textarea {
+    resize: vertical;
+    min-height: 6.5rem;
+    max-height: 18rem;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.char-counter-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+}
+
+.review-login-prompt {
+    padding: 0.875rem 1rem;
+    background-color: var(--surface-alt);
+    border: var(--border-width) solid var(--border);
+    border-radius: 0.375rem;
+    margin-bottom: 1.5rem;
+}
+
+.review-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 100%;
+}
+
+.review-card {
+    padding: 1rem 1.125rem;
+    background-color: var(--bg);
+    border: var(--border-width) solid var(--border);
+    border-radius: 0.375rem;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.review-card-own {
+    border-color: var(--primary);
+}
+
+[data-theme="high-light"] .review-card-own,
+[data-theme="high-dark"] .review-card-own {
+    border-color: var(--border);
+}
+
+.review-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: var(--border-width) solid var(--border);
+}
+
+.review-author-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.review-author {
+    max-width: 24rem;
+}
+
+.review-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.9rem;
+}
+
+.review-grade-num {
+    font-size: 0.9rem;
+    margin-left: 0.25rem;
+}
+
+.review-body {
+    margin-top: 0.75rem;
+    max-width: 100%;
+    max-height: 15rem;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: pre-line;
+    unicode-bidi: plaintext;
+    isolation: isolate;
 }
 
 /* Buttons */
@@ -787,6 +1048,39 @@ h3 {
 }
 
 /* Footer */
+.huolto-subnav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    padding: 0.875rem 1.25rem;
+}
+
+.huolto-filter-form {
+    padding: 1rem;
+    background-color: var(--surface-alt);
+    border: var(--border-width) solid var(--border);
+    border-radius: 0.375rem;
+    margin-bottom: 1rem;
+}
+
+.filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    gap: 0.875rem;
+}
+
+.huolto-details {
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: var(--border-width) solid var(--border);
+}
+
+.huolto-details summary {
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0.25rem 0;
+}
+
 .site-footer {
     border-top: var(--border-width) solid var(--border);
     background-color: var(--surface);

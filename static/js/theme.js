@@ -110,21 +110,98 @@
         window.setInterval(updateAll, 1000);
     }
 
+    function initStarPickers() {
+        var pickers = document.querySelectorAll('[data-star-picker]');
+        pickers.forEach(function (picker) {
+            var labels = Array.prototype.slice.call(picker.querySelectorAll('.star-choice'));
+            var statusNode = picker.querySelector('[data-star-status]');
+
+            function getSelectedValue() {
+                var checked = picker.querySelector('input[type="radio"]:checked');
+                return checked ? parseInt(checked.value, 10) : 0;
+            }
+
+            function renderStars(activeUpTo, selectedVal) {
+                labels.forEach(function (label) {
+                    var input = label.querySelector('input[type="radio"]');
+                    var glyph = label.querySelector('.star-visual');
+                    var val = input ? parseInt(input.value, 10) : 0;
+                    var isLit = val <= activeUpTo;
+
+                    label.classList.toggle('is-lit', isLit);
+                    label.classList.toggle('is-selected', val === selectedVal && selectedVal > 0);
+                    if (glyph) {
+                        glyph.textContent = isLit ? '\u2605' : '\u2606';
+                    }
+                });
+
+                if (statusNode) {
+                    statusNode.textContent = selectedVal > 0
+                        ? 'Valittu: ' + selectedVal + ' / 5 tähteä'
+                        : 'Ei vielä valittu';
+                }
+            }
+
+            labels.forEach(function (label) {
+                var input = label.querySelector('input[type="radio"]');
+                var val = input ? parseInt(input.value, 10) : 0;
+
+                if (input) {
+                    input.addEventListener('change', function () {
+                        var current = getSelectedValue();
+                        renderStars(current, current);
+                    });
+                }
+
+                label.addEventListener('mouseenter', function () {
+                    renderStars(val, getSelectedValue());
+                });
+            });
+
+            picker.addEventListener('mouseleave', function () {
+                var current = getSelectedValue();
+                renderStars(current, current);
+            });
+
+            var initial = getSelectedValue();
+            renderStars(initial, initial);
+        });
+    }
+
+    function initCharCounters() {
+        var counters = document.querySelectorAll('[data-char-counter]');
+        counters.forEach(function (counter) {
+            var targetId = counter.getAttribute('data-char-counter');
+            var maxLen = counter.getAttribute('data-max') || '2000';
+            var field = targetId ? document.getElementById(targetId) : null;
+            if (!field) {
+                return;
+            }
+            function updateCount() {
+                counter.textContent = field.value.length + ' / ' + maxLen;
+            }
+            field.addEventListener('input', updateCount);
+            updateCount();
+        });
+    }
+
     window.lainamaakaritTheme = {
         applyTheme: applyTheme,
         getActiveTheme: getActiveTheme,
         VALID_THEMES: VALID_THEMES
     };
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function () {
-            initThemeSwitcher();
-            initMobileNav();
-            initLoanCountdowns();
-        });
-    } else {
+    function initAll() {
         initThemeSwitcher();
         initMobileNav();
         initLoanCountdowns();
+        initStarPickers();
+        initCharCounters();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initAll);
+    } else {
+        initAll();
     }
 })();

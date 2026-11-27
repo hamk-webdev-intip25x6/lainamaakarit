@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Huolto | Lainamääkärit{% endblock %}
+
+{% block content %}
+<section class="page-header">
+    <h1>Huolto &ndash; Ylläpitopaneeli</h1>
+    <p class="text-muted">
+        Hallitse kirjojen lainoja, poista tai palauta kirjoja valikoimaan sekä seuraa ja suodata uusia kommentteja.
+    </p>
+</section>
+
+<nav class="huolto-subnav card" aria-label="Huollon osiot">
+    <a href="#lainat-osio" class="btn btn-outline btn-sm">Lainojen hallinta ({{ aktiiviset_lainat|length }} voimassa)</a>
+    <a href="#kommentit-osio" class="btn btn-outline btn-sm">Uusien kommenttien syöte ({{ kommentit|length }})</a>
+    <a href="#kirjat-osio" class="btn btn-outline btn-sm">Kirjavalikoima ({{ kirjat|length }})</a>
+</nav>
+
+<!-- 1. Lainojen hallinta: muokkaa tai lopeta ennenaikaisesti -->
+<section class="card mt-section" id="lainat-osio" aria-label="Lainojen hallinta">
+    <h2>Voimassa olevat lainat ({{ aktiiviset_lainat|length }})</h2>
+
+    {% if aktiiviset_lainat %}
+        <div class="loan-list">
+            {% for laina in aktiiviset_lainat %}
+                <article class="loan-row">
+                    <div class="loan-row-info">
+                        <h3 class="break-anywhere">
+                            <a href="{% url 'kirja_tiedot' laina.kirja.kirja_id %}">{{ laina.kirja.nimi }}</a>
+                        </h3>
+                        <p class="text-muted break-anywhere">
+                            Lainaaja: <strong>{{ laina.kayttaja.username }}</strong> &middot;
+                            Alkoi: {{ laina.laina_alku|date:"d.m.Y H:i:s" }} &middot;
+                            Päättyy: <strong>{{ laina.laina_loppu|date:"d.m.Y H:i:s" }}</strong>
+                            <span class="loan-countdown" data-expires-at="{{ laina.laina_loppu|date:'c' }}"></span>
+                        </p>
+                    </div>
+                    <div class="action-group compact-actions">
+                        <a href="{% url 'huolto_muokkaa_laina' laina.laina_id %}" class="btn btn-outline btn-sm">Muokkaa lainaa</a>
+                        <form method="post" action="{% url 'huolto_lopeta_laina' laina.laina_id %}" class="inline-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                            <button type="submit" class="btn btn-danger btn-sm">Lopeta heti</button>
+                        </form>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="text-muted mb-0">Ei voimassa olevia lainoja tällä hetkellä.</p>
+    {% endif %}
+
+    {% if paattyneet_lainat %}
+        <details class="huolto-details">
+            <summary>Viimeisimmät päättyneet lainat ({{ paattyneet_lainat|length }})</summary>
+            <div class="loan-list mt-1">
+                {% for laina in paattyneet_lainat %}
+                    <article class="loan-row loan-row-ended">
+                        <div class="loan-row-info">
+                            <h3 class="break-anywhere">{{ laina.kirja.nimi }}</h3>
+                            <p class="text-muted break-anywhere">
+                                Lainaaja: <strong>{{ laina.kayttaja.username }}</strong> &middot;
+                                {{ laina.laina_alku|date:"d.m.Y H:i" }} &ndash; {{ laina.laina_loppu|date:"d.m.Y H:i" }}
+                            </p>
+                        </div>
+                        <div class="action-group compact-actions">
+                            <a href="{% url 'huolto_muokkaa_laina' laina.laina_id %}" class="btn btn-outline btn-sm">Muokkaa lainaa</a>
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        </details>
+    {% endif %}
+</section>
+
+<!-- 2. Uusien kommenttien syöte & luontipäivän suodatin -->
+<section class="card mt-section reviews-section" id="kommentit-osio" aria-label="Uusien kommenttien syöte">
+    <h2>Uusien kommenttien syöte ({{ kommentit|length }})</h2>
+
+    {% if paivavirhe %}
+        <div class="alert alert-error" role="alert">
+            <p>{{ paivavirhe }}</p>
+        </div>
+    {% endif %}
+
+    <form method="get" action="{% url 'huolto' %}#kommentit-osio" class="huolto-filter-form">
+        <div class="filter-grid">
+            <div class="form-group mb-0">
+                <label for="paiva">Tarkka luontipäivä</label>
+                <input type="date" id="paiva" name="paiva" value="{{ paiva }}">
+            </div>
+            <div class="form-group mb-0">
+                <label for="alkaen">Luotu alkaen</label>
+                <input type="date" id="alkaen" name="alkaen" value="{{ alkaen }}">
+            </div>
+            <div class="form-group mb-0">
+                <label for="asti">Luotu asti</label>
+                <input type="date" id="asti" name="asti" value="{{ asti }}">
+            </div>
+        </div>
+        <div class="action-group">
+            <button type="submit" class="btn btn-primary btn-sm">Suodata kommentteja</button>
+            {% if paiva or alkaen or asti %}
+                <a href="{% url 'huolto' %}#kommentit-osio" class="btn btn-outline btn-sm">Näytä kaikki kommentit</a>
+            {% endif %}
+        </div>
+    </form>
+
+    {% if kommentit %}
+        <div class="review-list mt-1">
+            {% for kommentti in kommentit %}
+                <article class="review-card">
+                    <header class="review-header">
+                        <div class="review-author-group">
+                            <strong class="review-author break-anywhere">{{ kommentti.kayttaja.username }}</strong>
+                            <span class="text-muted">&rarr;</span>
+                            <a href="{% url 'kirja_tiedot' kommentti.kirja.kirja_id %}" class="break-anywhere">
+                                <strong>{{ kommentti.kirja.nimi }}</strong>
+                            </a>
+                        </div>
+
+                        <div class="review-meta">
+                            <span class="star-display" aria-label="{{ kommentti.arvosana }} / 5 tähteä">
+                                {% for i in tahti_asteikko %}{% if i <= kommentti.arvosana %}<span class="star-filled" aria-hidden="true">&#9733;</span>{% else %}<span class="star-empty" aria-hidden="true">&#9734;</span>{% endif %}{% endfor %}
+                                <strong class="review-grade-num">{{ kommentti.arvosana }}/5</strong>
+                            </span>
+                            <time class="review-date text-muted" datetime="{{ kommentti.luotu|date:'c' }}">
+                                {{ kommentti.luotu|date:"d.m.Y H:i:s" }}
+                            </time>
+                            <form method="post" action="{% url 'huolto_poista_kommentti' kommentti.kommentti_id %}" class="inline-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                <button type="submit" class="btn btn-danger btn-sm">Poista arvostelu</button>
+                            </form>
+                        </div>
+                    </header>
+
+                    <div class="review-body">{{ kommentti.teksti }}</div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="text-muted mt-1 mb-0">Valituilla päivämääräehdoilla ei löytynyt kommentteja.</p>
+    {% endif %}
+</section>
+
+<!-- 3. Kirjavalikoiman hallinta: piilota (delist) tai palauta kirjoja -->
+<section class="card mt-section" id="kirjat-osio" aria-label="Kirjavalikoiman hallinta">
+    <h2>Kirjavalikoiman hallinta ({{ kirjat|length }})</h2>
+    <p class="text-muted">Valikoimasta poistetut kirjat piilotetaan julkisesta kirjastosta eikä niitä voi lainata.</p>
+
+    <div class="loan-list">
+        {% for kirja in kirjat %}
+            <article class="loan-row">
+                <div class="loan-row-info">
+                    <div class="badge-row">
+                        {% if kirja.listattu %}
+                            <span class="badge badge-available">Listattu</span>
+                        {% else %}
+                            <span class="badge badge-loaned">Poistettu valikoimasta</span>
+                        {% endif %}
+                        {% if kirja.aktiiviset_lainat %}
+                            <span class="badge badge-meta">Lainassa ({{ kirja.aktiiviset_lainat.0.kayttaja.username }})</span>
+                        {% endif %}
+                    </div>
+                    <h3 class="break-anywhere">
+                        <a href="{% url 'kirja_tiedot' kirja.kirja_id %}">{{ kirja.nimi }}</a>
+                    </h3>
+                    <p class="text-muted break-anywhere">{{ kirja.tekija }} ({{ kirja.tehty }})</p>
+                </div>
+
+                <div class="action-group compact-actions">
+                    <form method="post" action="{% url 'huolto_vaihda_listaus' kirja.kirja_id %}" class="inline-form">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        {% if kirja.listattu %}
+                            <input type="hidden" name="toiminto" value="piilota">
+                            <button type="submit" class="btn btn-danger btn-sm">Poista valikoimasta</button>
+                        {% else %}
+                            <input type="hidden" name="toiminto" value="palauta">
+                            <button type="submit" class="btn btn-primary btn-sm">Palauta valikoimaan</button>
+                        {% endif %}
+                    </form>
+                </div>
+            </article>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

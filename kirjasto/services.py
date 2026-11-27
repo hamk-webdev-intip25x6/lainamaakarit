@@ -219,7 +219,6 @@ def _ajasta_tiedoston_poisto(tiedosto_polku: Path, loans_dir: Path, viive_sekunt
     if viive_sekuntia <= 0:
         _poista_polku_turvallisesti(tiedosto_polku, loans_dir)
         return
-    # Avoid scheduling multi-day threads if > 1 hour; lazy cleanup handles long durations
     if viive_sekuntia > 3600:
         return
     timer = threading.Timer(
@@ -288,6 +287,9 @@ def luo_laina(kayttaja, kirja: Kirja) -> Laina:
     """Decrypt a temporary copy of kirja and create an active Laina for kayttaja."""
     siivoa_vanhentuneet_lainat()
 
+    if not kirja.listattu:
+        raise LoanError("Kirja on poistettu valikoimasta eikä ole lainattavissa.")
+
     if not kirja.salattu_tiedosto:
         raise LoanError("Tälle kirjalle ei ole määritetty salattua PDF-tiedostoa.")
 
@@ -295,7 +297,6 @@ def luo_laina(kayttaja, kirja: Kirja) -> Laina:
     loans_dir = get_loans_dir()
     enc_path = _safe_join(enc_dir, kirja.salattu_tiedosto)
     if not enc_path.is_file():
-        # Attempt on-demand encryption if matching sample PDF exists in PDF_SOURCE_DIR
         _varmista_salattu_esimerkkikirja(kirja.salattu_tiedosto)
     if not enc_path.is_file():
         raise LoanError("Kirjan salattua PDF-tiedostoa ei löytynyt kirjastokansiosta.")
@@ -341,6 +342,51 @@ def lopeta_laina(laina: Laina) -> Laina:
     if laina.laina_loppu > now:
         laina.laina_loppu = now
         laina.save(update_fields=["laina_loppu"])
+    return laina
+
+
+def synkronoi_muokattu_laina(laina: Laina, vanha_kirja_id: int | None = None) -> Laina:
+    """
+    Synchronize temporary PDF file state after an admin modifies a loan in Huolto.
+    Deletes the temporary copy if expired; provisions a fresh copy if active and missing.
+    """
+    now = timezone.now()
+    if laina.laina_loppu <= now:
+        poista_lainan_tiedosto(laina)
+        return laina
+
+    loans_dir = get_loans_dir()
+    kirja_vaihtui = vanha_kirja_id is not None and vanha_kirja_id != laina.kirja_id
+    if kirja_vaihtui and laina.valiaikainen_tiedosto:
+        poista_lainan_tiedosto(laina)
+
+    tarvitsee_kopion = True
+    if laina.valiaikainen_tiedosto:
+        try:
+            polku = _safe_join(loans_dir, laina.valiaikainen_tiedosto)
+            if polku.is_file():
+                tarvitsee_kopion = False
+                viive = (laina.laina_loppu - now).total_seconds()
+                _ajasta_tiedoston_poisto(polku, loans_dir, viive)
+        except ValueError:
+            tarvitsee_kopion = True
+
+    if tarvitsee_kopion and laina.kirja.salattu_tiedosto:
+        enc_path = _safe_join(get_encrypted_dir(), laina.kirja.salattu_tiedosto)
+        if not enc_path.is_file():
+            _varmista_salattu_esimerkkikirja(laina.kirja.salattu_tiedosto)
+        if enc_path.is_file():
+            token = laina.laina_tunniste or secrets.token_urlsafe(24)
+            safe_slug = slugify(laina.kirja.nimi) or f"kirja-{laina.kirja_id}"
+            rel_temp = f"{token}/{safe_slug}.pdf"
+            dest_path = _safe_join(loans_dir, rel_temp)
+            decrypt_pdf_file(enc_path, dest_path)
+            laina.laina_tunniste = token
+            laina.valiaikainen_tiedosto = rel_temp
+            laina.save(update_fields=["laina_tunniste", "valiaikainen_tiedosto"])
+            viive = (laina.laina_loppu - now).total_seconds()
+            _ajasta_tiedoston_poisto(dest_path, loans_dir, viive)
+
     return laina
 
 
