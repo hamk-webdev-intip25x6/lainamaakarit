@@ -1,22 +1,32 @@
 from datetime import datetime, timedelta
 from pathlib import Path
+import socket
+import subprocess
 import tempfile
 import time
 
+from django.conf import settings
 from django.contrib.auth import get_user_model, views as auth_views
 from django.contrib.staticfiles import finders
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.db import IntegrityError, connection
 from django.test import TestCase, override_settings
 from django.urls import resolve, reverse
 from django.utils import timezone
 
 from .crypto import EncryptionError, decrypt_pdf_file, encrypt_pdf_file, is_encrypted_file
-from .forms import ArvosteluLomake, SignupForm
+from .forms import ArvosteluLomake, LainaMuokkausLomake, SignupForm
 from .models import Kirja, Kommentti, Laina
+from .populate import FINNISH_USERS, populoi_tietokanta
 from .services import (
+    LoanError,
     SAMPLE_BOOKS,
+    _safe_join,
     hae_laina_aika,
+    hae_laina_ajan_kuvaus,
+    luo_laina,
+    siivoa_vanhentuneet_lainat,
     synkronoi_esimerkkikirjat,
 )
 
@@ -1064,4 +1074,309 @@ class HuoltoAdminPanelTests(TestCase):
         )
         self.assertEqual(poisto.status_code, 200)
         self.assertFalse(Kommentti.objects.filter(pk=k_arabia_xss.kommentti_id).exists())
+
+
+class PopulateDBAndServerScriptTests(TestCase):
+    """PR5-testit: tietokannan idempotentti populointi sekä paikallinen tiedostopalvelinskripti."""
+
+    def test_populate_db_luo_viisi_suomalaista_kayttajaa_lainat_ja_arvostelut_idempotentisti(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir)
+            pdf_src = tmp_root / "pdf"
+            lib_dir = tmp_root / "library"
+            pdf_src.mkdir()
+
+            for item in SAMPLE_BOOKS:
+                (pdf_src / item["source_filename"]).write_bytes(MINIMAL_PDF_BYTES)
+
+            with override_settings(PDF_SOURCE_DIR=pdf_src, LIBRARY_ROOT=lib_dir):
+                call_command("populate_db")
+
+                self.assertEqual(Kirja.objects.count(), 10)
+                self.assertEqual(User.objects.count(), 5)
+                for u_info in FINNISH_USERS:
+                    u = User.objects.get(username=u_info["username"])
+                    self.assertTrue(u.password.startswith("pbkdf2_sha256$"))
+                    self.assertTrue(u.check_password(u_info["password"]))
+
+                lainat = list(Laina.objects.all())
+                self.assertGreaterEqual(len(lainat), 1)
+                self.assertLessEqual(len(lainat), 2)
+                lainatut_kirja_idt = {l.kirja_id for l in lainat}
+                self.assertEqual(len(lainatut_kirja_idt), len(lainat))
+
+                for kirja in Kirja.objects.all():
+                    self.assertGreaterEqual(
+                        kirja.kommentit.count(),
+                        3,
+                        f"Kirjalla {kirja.nimi} tulisi olla vähintään 3 arvostelua.",
+                    )
+
+                kommentteja_ennen = Kommentti.objects.count()
+                lainoja_ennen = Laina.objects.count()
+
+                # Muokataan yhtä käyttäjää varmistaaksemme, ettei toinen ajo ylikirjoita olemassa olevaa dataa
+                aino = User.objects.get(username="aino_korhonen")
+                aino.first_name = "MuokattuAino"
+                aino.save(update_fields=["first_name"])
+
+                # Toinen populointiajo ei saa lisätä tai muuttaa mitään olemassa olevaa tietoa
+                tulos2 = populoi_tietokanta()
+                self.assertEqual(
+                    tulos2,
+                    {"kirjat": 0, "kayttajat": 0, "lainat": 0, "kommentit": 0},
+                )
+                self.assertEqual(Kirja.objects.count(), 10)
+                self.assertEqual(User.objects.count(), 5)
+                self.assertEqual(Laina.objects.count(), lainoja_ennen)
+                self.assertEqual(Kommentti.objects.count(), kommentteja_ennen)
+                aino.refresh_from_db()
+                self.assertEqual(aino.first_name, "MuokattuAino")
+
+    def test_serve_folder_skripti_portti_curl_ja_kaikkien_alikansioiden_selaus(self) -> None:
+        script_path = Path(settings.BASE_DIR) / "serve_folder.sh"
+        self.assertTrue(script_path.is_file())
+        script_text = script_path.read_text(encoding="utf-8")
+        self.assertIn("8002", script_text)
+        self.assertIn("curl", script_text)
+
+        # Virheellinen portti hylätään
+        bad_proc = subprocess.run(
+            [str(script_path), "99999", "--check"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertNotEqual(bad_proc.returncode, 0)
+
+        # Etsitään vapaa portti ja testataan alikansioiden selaus curlilla
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_dir = Path(tmpdir)
+            sub_dir = tmp_dir / "alikansio_yksi" / "alikansio_kaksi"
+            sub_dir.mkdir(parents=True)
+            # Lisätään jopa index.html varmistaaksemme, että alikansion listaus näkyy silti oletuksena
+            (sub_dir / "index.html").write_text("<h1>Piilotettu</h1>", encoding="utf-8")
+            monikielinen_tiedosto = "testi_ääkköset_中文_العربية.txt"
+            (sub_dir / monikielinen_tiedosto).write_text("Sisältö OK", encoding="utf-8")
+
+            proc = subprocess.Popen(
+                [str(script_path), "--port", str(free_port), "--dir", str(tmp_dir)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                base_url = f"http://127.0.0.1:{free_port}"
+                valmis = False
+                for _ in range(30):
+                    chk = subprocess.run(
+                        ["curl", "-fsS", f"{base_url}/"],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if chk.returncode == 0:
+                        valmis = True
+                        break
+                    time.sleep(0.1)
+                self.assertTrue(valmis, "serve_folder.sh ei käynnistynyt ajoissa.")
+
+                # Tarkistetaan juuri ja syvä alikansio curlilla
+                root_listing = subprocess.run(
+                    ["curl", "-fsS", f"{base_url}/"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout
+                self.assertIn("alikansio_yksi/", root_listing)
+
+                sub_listing = subprocess.run(
+                    ["curl", "-fsS", f"{base_url}/alikansio_yksi/alikansio_kaksi/"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout
+                self.assertIn("Directory listing for /alikansio_yksi/alikansio_kaksi/", sub_listing)
+                self.assertIn("index.html", sub_listing)
+            finally:
+                proc.terminate()
+                proc.wait(timeout=5)
+
+
+class ComprehensiveFormsAndSecurityTests(TestCase):
+    """PR6-lisätestit: kaikkien lomakkeiden yksikkötestit, reunatapaukset ja tietoturvatarkistukset."""
+
+    def setUp(self) -> None:
+        self.u1 = User.objects.create_user(username="lomake_kayttaja", password="LomakeSalasana123!")
+        self.u2 = User.objects.create_user(username="toinen_kayttaja", password="ToinenSalasana123!")
+        self.kirja1 = Kirja.objects.create(
+            nimi="Lomaketestauksen käsikirja",
+            tekija="Teppo Testaaja",
+            tehty=2023,
+            kategoria="Ohjelmistotekniikka",
+            kieli="Suomi",
+            avainsana="testaus, lomakkeet",
+        )
+        self.kirja2 = Kirja.objects.create(
+            nimi="Toinen testikirja",
+            tekija="Maija Malli",
+            tehty=2024,
+            kategoria="Ohjelmistotekniikka",
+            kieli="Suomi",
+        )
+
+    def test_signup_form_reunatapaukset_ja_commit_false(self) -> None:
+        # Käyttäjänimen kaltainen salasana hylätään UserAttributeSimilarityValidatorilla
+        samankaltainen = SignupForm(
+            data={"username": "virtanen_pekka", "password": "virtanen_pekka1"}
+        )
+        self.assertFalse(samankaltainen.is_valid())
+        self.assertIn("password", samankaltainen.errors)
+
+        # Pelkästään numeroita sisältävä salasana hylätään
+        numerot = SignupForm(data={"username": "uusi_lukija", "password": "1234567890"})
+        self.assertFalse(numerot.is_valid())
+        self.assertIn("password", numerot.errors)
+
+        # commit=False salaa salasanan tallentamatta vielä kantaan
+        kelvollinen = SignupForm(
+            data={"username": "  siistitty_nimi  ", "password": "VahvaUniikkiSalasana99!"}
+        )
+        self.assertTrue(kelvollinen.is_valid(), kelvollinen.errors)
+        kayttaja = kelvollinen.save(commit=False)
+        self.assertIsNone(kayttaja.pk)
+        self.assertEqual(kayttaja.username, "siistitty_nimi")
+        self.assertTrue(kayttaja.check_password("VahvaUniikkiSalasana99!"))
+
+    def test_arvostelulomake_trimmaus_ja_rajapituudet(self) -> None:
+        # Täsmälleen 2000 merkkiä (ympäröivien välilyöntien poiston jälkeen) hyväksytään
+        tasan_max = "Hyvä! " + ("ä" * (Kommentti.MAX_TEKSTI_PITUUS - 6))
+        lomake_ok = ArvosteluLomake(data={"arvosana": "5", "teksti": f"  {tasan_max}  \n"})
+        self.assertTrue(lomake_ok.is_valid(), lomake_ok.errors)
+        self.assertEqual(lomake_ok.cleaned_data["arvosana"], 5)
+        self.assertEqual(lomake_ok.cleaned_data["teksti"], tasan_max)
+
+        # Puuttuva tähtiarvosana hylätään suomenkielisellä virheilmoituksella
+        ilman_tahtia = ArvosteluLomake(data={"teksti": "Hyvä kirja ilman tähtiä."})
+        self.assertFalse(ilman_tahtia.is_valid())
+        self.assertIn("arvosana", ilman_tahtia.errors)
+
+    def test_lainamuokkauslomake_estaa_paallekkaiset_lainat_ja_virheellisen_aikajarjestyksen(self) -> None:
+        nyt = timezone.localtime(timezone.now()).replace(microsecond=0)
+        laina1 = Laina.objects.create(
+            kirja=self.kirja1,
+            kayttaja=self.u1,
+            laina_alku=nyt,
+            laina_loppu=nyt + timedelta(days=3),
+        )
+        laina2 = Laina.objects.create(
+            kirja=self.kirja2,
+            kayttaja=self.u2,
+            laina_alku=nyt,
+            laina_loppu=nyt + timedelta(days=2),
+        )
+
+        # Lopetusaika ennen alkamisaikaa hylätään
+        vaarinpain = LainaMuokkausLomake(
+            data={
+                "kirja": self.kirja1.kirja_id,
+                "kayttaja": self.u1.pk,
+                "laina_alku": nyt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "laina_loppu": (nyt - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S"),
+            },
+            instance=laina1,
+        )
+        self.assertFalse(vaarinpain.is_valid())
+        self.assertIn("laina_loppu", vaarinpain.errors)
+
+        # Lainaa 2 ei voi siirtää kirjalle 1 niin kauan kuin kirjalla 1 on aktiivinen laina 1
+        konflikti = LainaMuokkausLomake(
+            data={
+                "kirja": self.kirja1.kirja_id,
+                "kayttaja": self.u2.pk,
+                "laina_alku": nyt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "laina_loppu": (nyt + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S"),
+            },
+            instance=laina2,
+        )
+        self.assertFalse(konflikti.is_valid())
+        self.assertIn("kirja", konflikti.errors)
+
+        # Saman lainan (laina1) muokkaaminen omalle kirjalleen onnistuu
+        oma_muokkaus = LainaMuokkausLomake(
+            data={
+                "kirja": self.kirja1.kirja_id,
+                "kayttaja": self.u1.pk,
+                "laina_alku": nyt.strftime("%Y-%m-%d %H:%M:%S"),
+                "laina_loppu": (nyt + timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            instance=laina1,
+        )
+        self.assertTrue(oma_muokkaus.is_valid(), oma_muokkaus.errors)
+
+    def test_polun_ylityksen_esto_ja_avoimen_uudelleenohjauksen_esto(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            with self.assertRaises(ValueError):
+                _safe_join(base, "../../etc/passwd")
+            with self.assertRaises(ValueError):
+                _safe_join(base, ".")
+
+        # Avoimen uudelleenohjauksen (open redirect) esto ulkoiseen osoitteeseen lopeta_laina-näkymässä
+        nyt = timezone.now()
+        laina = Laina.objects.create(
+            kirja=self.kirja1,
+            kayttaja=self.u1,
+            laina_alku=nyt,
+            laina_loppu=nyt + timedelta(days=1),
+        )
+        self.client.force_login(self.u1)
+        resp = self.client.post(
+            reverse("lopeta_laina", args=[laina.laina_id]),
+            {"next": "https://paha-sivusto.example.com/kaappaus"},
+        )
+        self.assertRedirects(resp, reverse("kirja_tiedot", args=[self.kirja1.kirja_id]))
+
+    def test_get_pyynnot_post_reiteille_eivat_muuta_tilaa_ja_kestokuvaukset_toimivat(self) -> None:
+        self.client.force_login(self.u1)
+        # GET lainaa_kirja tai tallenna_arvostelu ohjaa turvallisesti kirjasivulle luomatta tietueita
+        r_laina = self.client.get(reverse("lainaa_kirja", args=[self.kirja1.kirja_id]))
+        self.assertRedirects(r_laina, reverse("kirja_tiedot", args=[self.kirja1.kirja_id]))
+        self.assertEqual(Laina.objects.count(), 0)
+
+        r_arv = self.client.get(reverse("tallenna_arvostelu", args=[self.kirja1.kirja_id]))
+        self.assertRedirects(r_arv, reverse("kirja_tiedot", args=[self.kirja1.kirja_id]))
+        self.assertEqual(Kommentti.objects.count(), 0)
+
+        # Tarkistetaan laina-ajan suomenkieliset kuvaukset eri aikayksiköille
+        with override_settings(LOAN_DURATION_SECONDS=15):
+            self.assertEqual(hae_laina_ajan_kuvaus(), "15 sekuntia")
+        with override_settings(LOAN_DURATION_SECONDS=180):
+            self.assertEqual(hae_laina_ajan_kuvaus(), "3 minuuttia")
+        with override_settings(LOAN_DURATION_SECONDS=7200):
+            self.assertEqual(hae_laina_ajan_kuvaus(), "2 tuntia")
+        with override_settings(LOAN_DURATION_SECONDS=None, LOAN_MODE="default"):
+            self.assertEqual(hae_laina_ajan_kuvaus(), "3 vuorokautta")
+
+    def test_orpojen_lainatiedostojen_siivous_ja_virhetilanteet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lib_root = Path(tmpdir) / "library"
+            loans_dir = lib_root / "loans"
+            (loans_dir / "orpo_kansio").mkdir(parents=True)
+            orpo_pdf = loans_dir / "orpo_kansio" / "ylimääräinen.pdf"
+            orpo_pdf.write_bytes(MINIMAL_PDF_BYTES)
+
+            with override_settings(LIBRARY_ROOT=lib_root):
+                siivoa_vanhentuneet_lainat()
+                self.assertFalse(orpo_pdf.exists())
+                self.assertFalse((loans_dir / "orpo_kansio").exists())
+
+                # Kirja ilman salattua tiedostoa nostaa selkeän LoanErrorin
+                with self.assertRaises(LoanError):
+                    luo_laina(self.u1, self.kirja1)
+
+
 
