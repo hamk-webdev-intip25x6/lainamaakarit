@@ -166,7 +166,7 @@ class Laina(models.Model):
 
     def clean(self) -> None:
         super().clean()
-        if self.laina_alku and self.laina_loppu and self.laina_alku > self.laina_loppu:
+        if self.laina_alku and self.laina_loppu and self.laina_alku >= self.laina_loppu:
             raise ValidationError(
                 {"laina_loppu": "Lainan lopetusajan täytyy olla alkamisajan jälkeen."}
             )
